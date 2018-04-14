@@ -33,7 +33,7 @@ int main(int argc, char * argv[]) {
                     break;
             }
     if (argc < 1)
-        printf("Usage: %s [-o] pattern ...\n", argv[0]);
+        printf("Usage: logfind [-o] pattern ...\n");
     else {
         int i = 0;
         char arguments[argc][MAX_LENGTH];
