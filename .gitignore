@@ -2,3 +2,5 @@ cmake*
 CMake*
 .idea/
 logfind
+logfind.dSYM/
+lf_paths
