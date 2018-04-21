@@ -3,4 +3,4 @@ CMake*
 .idea/
 logfind
 logfind.dSYM/
-lf_paths
+lf_paths_c
