@@ -2,7 +2,7 @@
  *
  *  logfind [-o] patterns
  *  A specialized version of 'grep'
- *  Default mode is logical and for patterns (-o for logical or)
+ *  Default mode is logical AND for patterns (-o for logical OR)
  *  Output: matching files
  */
 //#define _DEBUG_MODE_
@@ -13,15 +13,14 @@
 #include <glob.h>
 #include "dbg.h"
 
-#define MAX_LINE_LENGTH 120
+#define MAX_LINE 120
 
-const char * conf_file_path = "lf_paths";
+const char * conf_file_path = "lf_paths_c";
 
 int glob_files(FILE *fp, glob_t *glob_buf);
 int glob_err(const char * path, int eerrno);
-void glob_return_err(int return_value, char * path_pattern);
+void glob_return_err(int return_value);
 void find_text(char *pattern[], int size, glob_t *glob_buf, bool and_mode);
-bool text_inside(const char *src_str, const char *str_to_find);
 
 int main(int argc, char * argv[]) {
     int i = 0;
@@ -78,28 +77,27 @@ int main(int argc, char * argv[]) {
 
 error:
     if (fp) fclose(fp);
-    globfree(&glob_buf);
-    return -1;
+    return 1;
 }
 
 int glob_files(FILE *fp, glob_t *glob_buf)
 {
-    char path_pattern[MAX_LINE_LENGTH] = {'\0'};
+    char path_pattern[MAX_LINE] = {'\0'};
     char * new_line_char;
     int glob_return = 0;
-    int glob_flag = GLOB_TILDE;
+    int glob_flags = GLOB_TILDE;
 
-    while (fgets(path_pattern, MAX_LINE_LENGTH, fp) != NULL) {
+    while (fgets(path_pattern, MAX_LINE, fp) != NULL) {
         if (path_pattern[0] == '\n' || path_pattern[0] == '#')
             continue;
         if ((new_line_char = strchr(path_pattern, '\n')) != NULL)
             *new_line_char = '\0';
 
-        glob_return = glob(path_pattern, glob_flag, glob_err, glob_buf);
-        glob_flag |= GLOB_APPEND;
+        glob_return = glob(path_pattern, glob_flags, glob_err, glob_buf);
+        glob_flags |= GLOB_APPEND;
 
-        if (glob_return != 0)
-            glob_return_err(glob_return, path_pattern);
+        if (glob_return != 0 && glob_return != GLOB_NOMATCH)
+            glob_return_err(glob_return);
     }
 
     return (glob_buf->gl_pathc > 0) ? 0 : -1;
@@ -110,60 +108,49 @@ void find_text(char *pattern[], int size, glob_t *glob_buf, bool and_mode)
     int file_id = 0;
     int text_id = 0;
     FILE * fp = NULL;
-    char line[MAX_LINE_LENGTH] = {'\0'};
+    char line[MAX_LINE] = {'\0'};
     bool text_match[size];
     bool file_match;
     bool file_inside_match;
 
     for (file_id = 0; file_id < glob_buf->gl_pathc; file_id++) {
-        fp = fopen(glob_buf->gl_pathv[file_id], "r");
         file_match = false;
         for (text_id = 0; text_id < size; text_id++) {
             text_match[text_id] = false;
         }
-        while (fgets(line, MAX_LINE_LENGTH, fp) != NULL) {
-            for (text_id = 0; text_id < size; text_id++) {
-                if (and_mode) {
-                    if (text_inside(line, pattern[text_id])) {
-                        text_match[text_id] = true;
-                    }
-                } else {
-                    if (text_inside(line, pattern[text_id])) {
-                        file_match = true;
-                        break;
+        fp = fopen(glob_buf->gl_pathv[file_id], "r");
+        if (fp) {
+            while (fgets(line, MAX_LINE, fp) != NULL) {
+                for (text_id = 0; text_id < size; text_id++) {
+                    if (strcasestr(line, pattern[text_id])) {
+                        if (and_mode) {
+                            text_match[text_id] = true;
+                        } else {
+                            file_match = true;
+                            break;
+                        }
                     }
                 }
+
+                if (file_match) break;
+                file_inside_match = true;
+                for (text_id = 0; text_id < size; text_id++) {
+                    file_inside_match &= text_match[text_id];
+                }
+                if (file_inside_match) {
+                    file_match = true;
+                    break;
+                }
             }
-            if (file_match) break;
-            file_inside_match = true;
-            for (text_id = 0; text_id < size; text_id++) {
-                file_inside_match &= text_match[text_id];
-            }
-            if (file_inside_match) {
-                file_match = true;
-                break;
-            }
+        } else {
+            log_warn("Failed to open file: %s", glob_buf->gl_pathv[file_id]);
         }
+
         if (file_match) {
             puts(glob_buf->gl_pathv[file_id]);
         }
         fclose(fp);
     }
-}
-
-bool text_inside(const char *src_str, const char *str_to_find)
-{
-    size_t length_src = strlen(src_str);
-    size_t length_str_to_find = strlen(str_to_find);
-    long diff = length_src - length_str_to_find;
-
-    if (diff >= 0)
-        while (diff-- >= 0) {
-            if (! strncmp(src_str, str_to_find, length_str_to_find))
-                return true;
-            src_str++;
-        }
-    return false;
 }
 
 int glob_err(const char * path, int eerrno)
@@ -172,14 +159,12 @@ int glob_err(const char * path, int eerrno)
     return 0;
 }
 
-void glob_return_err(int return_value, char * path_pattern)
+void glob_return_err(int return_value)
 {
     if (return_value == GLOB_NOSPACE)
-        log_err("Running out of memory");
+        log_err("Glob: Running out of memory");
     else if (return_value == GLOB_ABORTED)
-        log_err("Read error");
-    else if (return_value == GLOB_NOMATCH)
-        log_warn("No found matches for %s", path_pattern);
+        log_err("Glob: Read error");
     else
-        log_err("Unknown problem");
+        log_err("Glob: Unknown problem");
 }
