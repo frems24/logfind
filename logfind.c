@@ -1,4 +1,4 @@
-/** \brief logfind - search files for text
+/** \brief logfind - search files for text patterns
  *
  *  logfind [-o] patterns
  *  A specialized version of 'grep'
@@ -8,27 +8,23 @@
 //#define _DEBUG_MODE_
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
 #include <glob.h>
 #include "dbg.h"
 
-#define MAX_LINE 120
-
 const char * conf_file_path = "lf_paths_c";
 
 int glob_files(FILE *fp, glob_t *glob_buf);
-int glob_err(const char * path, int eerrno);
+int glob_err(const char *path, int eerrno);
 void glob_return_err(int return_value);
-void find_text(char *pattern[], int size, glob_t *glob_buf, bool and_mode);
+void find_text(char *text_to_find[], int text_table_size, glob_t *glob_buf, bool and_mode);
 
-int main(int argc, char * argv[]) {
-    int i = 0;
-    char * s;
-    char * pattern[argc];
+int main(int argc, char *argv[]) {
+    char *s;
     bool and_mode = true;
-    FILE * fp = NULL;
-    glob_t glob_buf;
+    FILE *fp = NULL;
 
     while (--argc > 0 && (* ++argv)[0] == '-')
         for (s = argv[0] + 1; *s != '\0'; s++)
@@ -45,7 +41,8 @@ int main(int argc, char * argv[]) {
         printf("Usage: logfind [-o] pattern ...\n");
     else {
         /* Program main logic */
-        int glob_ret = 0;
+        char *pattern[argc];
+        int i = 0;
         for (i = 0; i < argc; i++) {
             pattern[i] = *argv++;
         }
@@ -54,7 +51,8 @@ int main(int argc, char * argv[]) {
         fp = fopen(conf_file_path, "r");
         check(fp != NULL, "Can't open the file: %s\n", conf_file_path);
 
-        glob_ret = glob_files(fp, &glob_buf);
+        glob_t glob_buf;
+        int glob_ret = glob_files(fp, &glob_buf);
         check(glob_ret == 0, "Can't match files in %s", conf_file_path);
         fclose(fp);
 
@@ -82,47 +80,51 @@ error:
 
 int glob_files(FILE *fp, glob_t *glob_buf)
 {
-    char path_pattern[MAX_LINE] = {'\0'};
-    char * new_line_char;
+    char *path_line = NULL;
+    size_t path_line_cap;
+    ssize_t line_len;
     int glob_return = 0;
     int glob_flags = GLOB_TILDE;
 
-    while (fgets(path_pattern, MAX_LINE, fp) != NULL) {
-        if (path_pattern[0] == '\n' || path_pattern[0] == '#')
-            continue;
-        if ((new_line_char = strchr(path_pattern, '\n')) != NULL)
-            *new_line_char = '\0';
+    while ((line_len = getline(&path_line, &path_line_cap, fp)) != -1) {
+        while (line_len > 0 && (path_line[line_len - 1] == '\n' ||
+                                path_line[line_len - 1] == '\r')) {
+            path_line[line_len - 1] = '\0';
+            line_len--;
+        }
+        if (path_line[0] != '\0' && path_line[0] != '#') {
+            glob_return = glob(path_line, glob_flags, glob_err, glob_buf);
+            glob_flags |= GLOB_APPEND;
 
-        glob_return = glob(path_pattern, glob_flags, glob_err, glob_buf);
-        glob_flags |= GLOB_APPEND;
-
-        if (glob_return != 0 && glob_return != GLOB_NOMATCH)
-            glob_return_err(glob_return);
+            if (glob_return != 0 && glob_return != GLOB_NOMATCH)
+                glob_return_err(glob_return);
+        }
     }
 
+    free(path_line);
     return (glob_buf->gl_pathc > 0) ? 0 : -1;
 }
 
-void find_text(char *pattern[], int size, glob_t *glob_buf, bool and_mode)
+void find_text(char *text_to_find[], int text_table_size, glob_t *glob_buf, bool and_mode)
 {
-    int file_id = 0;
-    int text_id = 0;
-    FILE * fp = NULL;
-    char line[MAX_LINE] = {'\0'};
-    bool text_match[size];
+    int text_id;
+    char *line = NULL;
+    size_t line_cap = 0;
+    bool text_match[text_table_size];
     bool file_match;
     bool file_inside_match;
 
-    for (file_id = 0; file_id < glob_buf->gl_pathc; file_id++) {
+    for (int file_id = 0; file_id < glob_buf->gl_pathc; file_id++) {
         file_match = false;
-        for (text_id = 0; text_id < size; text_id++) {
+        for (text_id = 0; text_id < text_table_size; text_id++) {
             text_match[text_id] = false;
         }
-        fp = fopen(glob_buf->gl_pathv[file_id], "r");
+
+        FILE *fp = fopen(glob_buf->gl_pathv[file_id], "r");
         if (fp) {
-            while (fgets(line, MAX_LINE, fp) != NULL) {
-                for (text_id = 0; text_id < size; text_id++) {
-                    if (strcasestr(line, pattern[text_id])) {
+            while (getline(&line, &line_cap, fp) != -1) {
+                for (text_id = 0; text_id < text_table_size; text_id++) {
+                    if (strcasestr(line, text_to_find[text_id])) {
                         if (and_mode) {
                             text_match[text_id] = true;
                         } else {
@@ -134,7 +136,7 @@ void find_text(char *pattern[], int size, glob_t *glob_buf, bool and_mode)
 
                 if (file_match) break;
                 file_inside_match = true;
-                for (text_id = 0; text_id < size; text_id++) {
+                for (text_id = 0; text_id < text_table_size; text_id++) {
                     file_inside_match &= text_match[text_id];
                 }
                 if (file_inside_match) {
@@ -151,9 +153,10 @@ void find_text(char *pattern[], int size, glob_t *glob_buf, bool and_mode)
         }
         fclose(fp);
     }
+    free(line);
 }
 
-int glob_err(const char * path, int eerrno)
+int glob_err(const char *path, int eerrno)
 {
     fprintf(stderr, "Error #%s in glob, path: %s\n", strerror(eerrno), path);
     return 0;
